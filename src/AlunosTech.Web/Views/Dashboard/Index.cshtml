@@ -1,0 +1,183 @@
+@model AlunosTech.Application.Services.DashboardDto
+@using AlunosTech.Web.Controllers
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Atendimento";
+    var tickets = ViewBag.Tickets as IEnumerable<DashboardController.ChamadoApiItem> ?? Enumerable.Empty<DashboardController.ChamadoApiItem>();
+    var pendingUsers = ViewBag.PendingUsers as IEnumerable<DashboardController.PendingUserApiItem> ?? Enumerable.Empty<DashboardController.PendingUserApiItem>();
+    var sectors = ViewBag.Sectors as IEnumerable<DashboardController.SectorApiItem> ?? Enumerable.Empty<DashboardController.SectorApiItem>();
+}
+
+<div class="container py-5">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+        <div>
+            <p class="text-primary fw-semibold mb-1">CENTRAL DE ATENDIMENTO</p>
+            <h2 class="mb-0">Olá, @ViewBag.UserName</h2>
+        </div>
+        <span class="text-muted">Chamados por setor</span>
+    </div>
+
+    @if (TempData["StatusMessage"] is not null)
+    {
+        <div class="alert alert-success">@TempData["StatusMessage"]</div>
+    }
+    @if (TempData["StatusError"] is not null)
+    {
+        <div class="alert alert-danger">@TempData["StatusError"]</div>
+    }
+
+    <div class="row g-3">
+        <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Total</small><h3 class="mt-2 mb-0">@Model.Total</h3></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Abertos</small><h3 class="mt-2 mb-0 text-warning-emphasis">@Model.Abertos</h3></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Em atendimento</small><h3 class="mt-2 mb-0 text-primary">@Model.EmAtendimento</h3></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Resolvidos</small><h3 class="mt-2 mb-0 text-success">@Model.Resolvidos</h3></div></div></div>
+    </div>
+
+    @if (ViewBag.CanManageUsers == true)
+    {
+    <div class="row g-4 mt-2">
+        <div class="col-lg-7">
+            <section class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h5 class="mb-1">Cadastros aguardando aprovação</h5>
+                            <p class="text-muted mb-0">Aprove o acesso e defina o setor do colaborador.</p>
+                        </div>
+                        <span class="badge rounded-pill text-bg-primary">@pendingUsers.Count()</span>
+                    </div>
+                    @if (pendingUsers.Any())
+                    {
+                        <div class="list-group list-group-flush">
+                            @foreach (var user in pendingUsers)
+                            {
+                                <div class="list-group-item px-0 py-3">
+                                    <div class="d-flex flex-column flex-xl-row justify-content-between gap-3">
+                                        <div>
+                                            <strong>@user.NomeCompleto</strong>
+                                            <div class="small text-muted">@user.Email</div>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <form asp-action="AprovarCadastro" method="post" class="d-flex gap-2">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@user.Id" />
+                                                <select class="form-select form-select-sm" name="setorId" required aria-label="Setor do colaborador">
+                                                    <option value="">Vincular setor</option>
+                                                    @foreach (var sector in sectors)
+                                                    {
+                                                        <option value="@sector.Id" selected="@(user.SetorSolicitadoId == sector.Id)">@sector.Nome</option>
+                                                    }
+                                                </select>
+                                                <button type="submit" class="btn btn-sm btn-primary">Aprovar</button>
+                                            </form>
+                                            <form asp-action="RejeitarCadastro" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@user.Id" />
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">Rejeitar</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="text-muted mb-0">Não há cadastros pendentes.</p>
+                    }
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-5">
+            <section class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="mb-1">Setores</h5>
+                    <p class="text-muted">Setores disponíveis para vincular aos colaboradores.</p>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        @foreach (var sector in sectors)
+                        {
+                            <span class="badge rounded-pill text-bg-light border">@sector.Nome</span>
+                        }
+                    </div>
+                    <form asp-action="CriarSetor" method="post" class="row g-2">
+                        @Html.AntiForgeryToken()
+                        <div class="col-12">
+                            <label class="form-label" for="nome-setor">Novo setor</label>
+                            <input id="nome-setor" name="nome" class="form-control" maxlength="100" required placeholder="Ex.: Logística" />
+                        </div>
+                        <div class="col-8">
+                            <label class="form-label" for="responsavel-setor">Responsável (opcional)</label>
+                            <input id="responsavel-setor" name="responsavel" class="form-control" maxlength="200" />
+                        </div>
+                        <div class="col-4 d-flex align-items-end">
+                            <button type="submit" class="btn btn-outline-primary w-100">Adicionar</button>
+                        </div>
+                    </form>
+                    <ul class="list-group list-group-flush mt-3">
+                        <li class="list-group-item px-0">Chamados atrasados: <strong>@Model.Atrasados</strong></li>
+                    </ul>
+                </div>
+            </section>
+        </div>
+    </div>
+    }
+
+    <section class="card mt-4 border-0 shadow-sm">
+        <div class="card-body">
+            <div class="mb-3">
+                <h5 class="mb-1">Chamados recebidos</h5>
+                <p class="text-muted mb-0">Responda, solicite informações ou finalize o atendimento.</p>
+            </div>
+            @if (tickets.Any())
+            {
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Número</th>
+                                <th>Resumo</th>
+                                <th>Setor</th>
+                                <th>Status</th>
+                                <th>Prioridade</th>
+                                <th>Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var ticket in tickets)
+                            {
+                                <tr>
+                                    <td class="text-nowrap">@ticket.Numero</td>
+                                    <td><strong>@ticket.Titulo</strong><div class="small text-muted">@ticket.Descricao</div></td>
+                                    <td>@(sectors.FirstOrDefault(sector => sector.Id == ticket.SetorId)?.Nome ?? "Não vinculado")</td>
+                                    <td><span class="badge text-bg-secondary">@ticket.Status</span></td>
+                                    <td>@ticket.Prioridade</td>
+                                    <td style="min-width: 260px">
+                                        <form asp-action="AtualizarStatus" method="post" class="d-flex flex-column gap-2">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="id" value="@ticket.Id" />
+                                            <textarea name="observacao" class="form-control form-control-sm" rows="2" placeholder="Resposta ou informação solicitada"></textarea>
+                                            <div class="d-flex gap-2">
+                                                <select class="form-select form-select-sm" name="status">
+                                                    <option value="EmAtendimento">Em atendimento</option>
+                                                    <option value="EmAnalise">Em análise</option>
+                                                    <option value="AguardandoSolicitante">Aguardar solicitante</option>
+                                                    <option value="Resolvido">Resolvido</option>
+                                                    <option value="Fechado">Fechado</option>
+                                                </select>
+                                                <button type="submit" class="btn btn-sm btn-primary">Responder</button>
+                                            </div>
+                                        </form>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <div class="rounded bg-light p-4 text-center text-muted">Nenhum chamado para exibir.</div>
+            }
+        </div>
+    </section>
+</div>

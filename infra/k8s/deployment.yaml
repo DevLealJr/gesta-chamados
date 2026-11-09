@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alunostech-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alunostech-api
+  template:
+    metadata:
+      labels:
+        app: alunostech-api
+    spec:
+      containers:
+        - name: alunostech-api
+          image: alunostech-api:latest
+          ports:
+            - containerPort: 8080

@@ -1,0 +1,150 @@
+openapi: 3.0.3
+info:
+  title: AlunosTech Chamados API
+  version: 1.0.0
+  description: API de cadastro, aprovação de colaboradores, setores e chamados.
+servers:
+  - url: http://localhost:5079
+paths:
+  /api/auth/login:
+    post:
+      summary: Autentica uma conta aprovada
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Sessão autenticada
+        '401':
+          description: Conta pendente/rejeitada ou credenciais inválidas
+  /api/auth/cadastro:
+    post:
+      summary: Solicita uma conta de colaborador
+      description: Cria uma conta pendente; não autentica o solicitante.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nomeCompleto, email, password]
+              properties:
+                nomeCompleto: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                setorId: { type: string, format: uuid, nullable: true }
+      responses:
+        '202':
+          description: Solicitação aguardando aprovação
+        '409':
+          description: E-mail já cadastrado
+  /api/setores:
+    get:
+      summary: Lista setores ativos para cadastro e aprovação
+      responses:
+        '200':
+          description: Setores ativos
+    post:
+      summary: Cadastra um setor
+      security: [{ bearerAuth: [] }]
+      responses:
+        '201':
+          description: Setor criado
+        '409':
+          description: Setor já cadastrado
+  /api/usuarios/pendentes:
+    get:
+      summary: Lista cadastros pendentes
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Cadastros que aguardam decisão
+  /api/usuarios/{id}/aprovar:
+    post:
+      summary: Aprova um colaborador e atribui seu setor
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setorId]
+              properties:
+                setorId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Colaborador aprovado
+  /api/chamados:
+    get:
+      summary: Lista chamados visíveis para o usuário autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Chamados do colaborador ou do setor responsável
+    post:
+      summary: Abre ou sincroniza um chamado
+      description: |
+        Envie um UUID estável em id. Repetir a requisição com o mesmo id e usuário
+        retorna o chamado já criado, permitindo sincronização offline idempotente.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, titulo, descricao]
+              properties:
+                id: { type: string, format: uuid }
+                titulo: { type: string }
+                descricao: { type: string }
+                prioridade: { type: string, enum: [Baixa, Media, Alta, Urgente] }
+                dataAbertura: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Chamado recebido
+        '200':
+          description: Chamado já sincronizado anteriormente
+  /api/chamados/{id}/comentarios:
+    get:
+      summary: Consulta as respostas e comentários do chamado
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Conversa do chamado
+  /api/chamados/{id}:
+    put:
+      summary: Atualiza o status ou responde a um chamado
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Chamado atualizado
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
