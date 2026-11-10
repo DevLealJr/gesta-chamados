@@ -32,7 +32,7 @@ public class ServicosController : ControllerBase
             .ToListAsync());
 
     [HttpPost]
-    [Authorize(Roles = "ADMIN,GESTOR")]
+    [Authorize(Roles = "ADMIN")]
     public async Task<IActionResult> Create([FromBody] CreateServicoRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Nome))

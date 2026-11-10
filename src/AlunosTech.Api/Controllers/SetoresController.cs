@@ -26,7 +26,7 @@ public class SetoresController : ControllerBase
             .Select(sector => new SetorResponse(sector.Id, sector.Nome))
             .ToListAsync());
 
-    [Authorize(Roles = "ADMIN,GESTOR")]
+    [Authorize(Roles = "ADMIN")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateSetorApiRequest request)
     {

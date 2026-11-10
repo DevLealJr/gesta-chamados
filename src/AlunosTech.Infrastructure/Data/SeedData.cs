@@ -1,6 +1,7 @@
 using AlunosTech.Domain.Entities;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace AlunosTech.Infrastructure.Data;
@@ -13,27 +14,28 @@ public static class SeedData
         var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
 
         await context.Database.EnsureCreatedAsync();
 
         var clienteId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var setoresIniciais = new[]
-        {
-            new Setor { Id = Guid.Parse("33333333-3333-3333-3333-333333333333"), ClienteId = clienteId, Nome = "Produção", Responsavel = "Equipe de Produção" },
-            new Setor { Id = Guid.Parse("44444444-4444-4444-4444-444444444444"), ClienteId = clienteId, Nome = "Administrativo", Responsavel = "Equipe Administrativa" },
-            new Setor { Id = Guid.Parse("55555555-5555-5555-5555-555555555555"), ClienteId = clienteId, Nome = "RH", Responsavel = "Recursos Humanos" }
-        };
-
         if (!await context.Clientes.AnyAsync())
         {
-            context.Clientes.Add(new Cliente { Id = clienteId, Nome = "Alunos Tech", Segmento = "Empresa" });
-        }
-
-        foreach (var setor in setoresIniciais)
-        {
-            if (!await context.Setores.AnyAsync(x => x.ClienteId == setor.ClienteId && x.Nome == setor.Nome))
+            context.Clientes.Add(new Cliente
             {
-                context.Setores.Add(setor);
+                Id = clienteId,
+                Nome = configuration["Company:Name"] ?? "Empresa",
+                Segmento = configuration["Company:Segment"] ?? string.Empty
+            });
+        }
+        else
+        {
+            var legacyCompany = await context.Clientes.FirstOrDefaultAsync(client =>
+                client.Id == clienteId && client.Nome == "Alunos Tech");
+            if (legacyCompany is not null)
+            {
+                legacyCompany.Nome = configuration["Company:Name"] ?? "Empresa";
+                legacyCompany.Segmento = configuration["Company:Segment"] ?? string.Empty;
             }
         }
 
@@ -55,41 +57,109 @@ public static class SeedData
         {
             if (!await roleManager.RoleExistsAsync(role))
             {
-                await roleManager.CreateAsync(new IdentityRole(role));
+                var result = await roleManager.CreateAsync(new IdentityRole(role));
+                if (!result.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        $"Não foi possível criar o perfil {role}: {string.Join(" ", result.Errors.Select(error => error.Description))}");
+                }
             }
         }
 
-        var demoUsers = new[]
+        var demoEmails = new[]
         {
-            new { Email = "admin@alunostech.local", Password = "Senha@123", Nome = "Administrador AlunosTech", Perfil = PerfilUsuario.ADMIN },
-            new { Email = "gestor@alunostech.local", Password = "Senha@123", Nome = "Gestor de Operações", Perfil = PerfilUsuario.GESTOR },
-            new { Email = "tecnico@alunostech.local", Password = "Senha@123", Nome = "Técnico de Suporte", Perfil = PerfilUsuario.TECNICO },
-            new { Email = "colaborador@alunostech.local", Password = "Senha@123", Nome = "Colaborador", Perfil = PerfilUsuario.COLABORADOR }
+            "admin@alunostech.local",
+            "gestor@alunostech.local",
+            "tecnico@alunostech.local",
+            "colaborador@alunostech.local"
         };
 
-        foreach (var demo in demoUsers)
+        foreach (var email in demoEmails)
         {
-            var existing = await userManager.FindByEmailAsync(demo.Email);
-            if (existing is null)
+            var demoUser = await userManager.FindByEmailAsync(email);
+            if (demoUser is not null)
             {
-                var user = new ApplicationUser
+                var result = await userManager.DeleteAsync(demoUser);
+                if (!result.Succeeded)
                 {
-                    UserName = demo.Email,
-                    Email = demo.Email,
-                    NomeCompleto = demo.Nome,
-                    Perfil = demo.Perfil,
-                    Ativo = true,
-                    StatusCadastro = "Aprovado",
-                    ClienteId = clienteId,
-                    SetorId = demo.Perfil == PerfilUsuario.ADMIN ? null : setoresIniciais[1].Id,
-                    EmailConfirmed = true
-                };
-
-                var result = await userManager.CreateAsync(user, demo.Password);
-                if (result.Succeeded)
-                {
-                    await userManager.AddToRoleAsync(user, demo.Perfil.ToString());
+                    throw new InvalidOperationException(
+                        $"Não foi possível remover a conta fictícia {email}: {string.Join(" ", result.Errors.Select(error => error.Description))}");
                 }
+            }
+        }
+
+        var legacySectorIds = new[]
+        {
+            Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            Guid.Parse("55555555-5555-5555-5555-555555555555")
+        };
+        foreach (var sectorId in legacySectorIds)
+        {
+            var isReferenced = await context.Users.AnyAsync(user =>
+                user.SetorId == sectorId || user.SetorSolicitadoId == sectorId) ||
+                await context.Chamados.AnyAsync(ticket => ticket.SetorId == sectorId);
+            if (!isReferenced)
+            {
+                var legacySector = await context.Setores.FirstOrDefaultAsync(sector => sector.Id == sectorId);
+                if (legacySector is not null)
+                {
+                    context.Setores.Remove(legacySector);
+                }
+            }
+        }
+        await context.SaveChangesAsync();
+
+        var adminEmail = configuration["BootstrapAdmin:Email"] ?? "adm_kauan@chamados.com";
+        var admin = await userManager.FindByEmailAsync(adminEmail);
+        if (admin is null)
+        {
+            var adminPassword = configuration["BootstrapAdmin:Password"];
+            if (string.IsNullOrWhiteSpace(adminPassword))
+            {
+                throw new InvalidOperationException(
+                    "Defina BootstrapAdmin:Password com a senha inicial antes da primeira execução da API.");
+            }
+
+            admin = new ApplicationUser
+            {
+                UserName = adminEmail,
+                Email = adminEmail,
+                NomeCompleto = "Kauan",
+                Perfil = PerfilUsuario.ADMIN,
+                Ativo = true,
+                StatusCadastro = "Aprovado",
+                ClienteId = clienteId,
+                EmailConfirmed = true
+            };
+            var createResult = await userManager.CreateAsync(admin, adminPassword);
+            if (!createResult.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Não foi possível criar o administrador inicial: {string.Join(" ", createResult.Errors.Select(error => error.Description))}");
+            }
+        }
+        else
+        {
+            admin.Perfil = PerfilUsuario.ADMIN;
+            admin.Ativo = true;
+            admin.StatusCadastro = "Aprovado";
+            admin.ClienteId ??= clienteId;
+            var updateResult = await userManager.UpdateAsync(admin);
+            if (!updateResult.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Não foi possível atualizar o administrador inicial: {string.Join(" ", updateResult.Errors.Select(error => error.Description))}");
+            }
+        }
+
+        if (!await userManager.IsInRoleAsync(admin, PerfilUsuario.ADMIN.ToString()))
+        {
+            var roleResult = await userManager.AddToRoleAsync(admin, PerfilUsuario.ADMIN.ToString());
+            if (!roleResult.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Não foi possível atribuir o perfil de administrador: {string.Join(" ", roleResult.Errors.Select(error => error.Description))}");
             }
         }
     }

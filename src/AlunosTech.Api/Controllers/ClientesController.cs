@@ -9,7 +9,7 @@ namespace AlunosTech.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "ADMIN,GESTOR")]
+[Authorize(Roles = "ADMIN")]
 public class ClientesController : ControllerBase
 {
     private readonly ApplicationDbContext _db;

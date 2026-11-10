@@ -1,5 +1,6 @@
 using System.Text;
 using AlunosTech.Application.Services;
+using AlunosTech.Api.Services;
 using AlunosTech.Infrastructure.Data;
 using AlunosTech.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -17,16 +18,23 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         options.User.RequireUniqueEmail = true;
         options.Password.RequiredLength = 8;
+        options.Password.RequireUppercase = false;
+        options.Password.RequireNonAlphanumeric = false;
     })
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>();
 
 builder.Services.AddControllers();
+builder.Services.AddHostedService<ResolvedTicketAutoCloser>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 
 var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtOptions>() ?? new JwtOptions();
 var keyBytes = Encoding.UTF8.GetBytes(jwtSettings.Key);
+if (keyBytes.Length < 32)
+{
+    throw new InvalidOperationException("Configure JwtSettings:Key com pelo menos 32 bytes aleatórios antes de iniciar a API.");
+}
 
 builder.Services.AddAuthentication(options =>
 {

@@ -28,9 +28,11 @@ public class DashboardController : Controller
         var ticketsResponse = await client.GetAsync("api/chamados");
         var sectorsResponse = await client.GetAsync("api/setores");
         var canManageUsers = CanManageUsers();
+        var usersResponse = canManageUsers ? await client.GetAsync("api/usuarios") : null;
         var pendingResponse = canManageUsers ? await client.GetAsync("api/usuarios/pendentes") : null;
         if (!ticketsResponse.IsSuccessStatusCode ||
             (pendingResponse is not null && !pendingResponse.IsSuccessStatusCode) ||
+            (usersResponse is not null && !usersResponse.IsSuccessStatusCode) ||
             !sectorsResponse.IsSuccessStatusCode)
         {
             TempData["StatusError"] = "Não foi possível carregar todos os dados da API. Confira se o serviço está disponível.";
@@ -45,17 +47,29 @@ public class DashboardController : Controller
         ViewBag.Sectors = sectorsResponse.IsSuccessStatusCode
             ? await sectorsResponse.Content.ReadFromJsonAsync<List<SectorApiItem>>() ?? new()
             : new List<SectorApiItem>();
+        ViewBag.Users = usersResponse?.IsSuccessStatusCode == true
+            ? await usersResponse.Content.ReadFromJsonAsync<List<UserApiItem>>() ?? new()
+            : new List<UserApiItem>();
         var dashboard = BuildDashboard(tickets);
 
         ViewBag.UserName = HttpContext.Session.GetString("userName") ?? "Usuário";
         ViewBag.CanManageUsers = canManageUsers;
+        ViewBag.IsAdmin = HttpContext.Session.GetString("perfil") == "ADMIN";
         ViewBag.Tickets = tickets;
+        ViewBag.TopProblems = tickets
+            .Where(ticket => ticket.Status is not "Fechado" and not "Cancelado")
+            .GroupBy(ticket => ticket.Titulo.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ProblemSummary(group.Key, group.Count()))
+            .OrderByDescending(problem => problem.Count)
+            .ThenBy(problem => problem.Title)
+            .Take(5)
+            .ToList();
         return View(dashboard);
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> AtualizarStatus(Guid id, string status, string? observacao)
+    public async Task<IActionResult> AtualizarStatus(Guid id, string status, string? observacao, Guid? tecnicoId)
     {
         if (!CanManageTickets())
         {
@@ -77,7 +91,9 @@ public class DashboardController : Controller
             descricao = ticket.Descricao,
             status,
             prioridade = ticket.Prioridade,
-            tecnicoId = ticket.TecnicoId,
+            tecnicoId = HttpContext.Session.GetString("perfil") is "ADMIN" or "GESTOR"
+                ? tecnicoId
+                : (Guid?)null,
             observacao = string.IsNullOrWhiteSpace(observacao)
                 ? (status == "AguardandoSolicitante" ? "Aguardando informações do solicitante." :
                     status == "Resolvido" || status == "Fechado" ? "Chamado finalizado pelo suporte." : "Chamado atualizado pelo suporte.")
@@ -99,7 +115,37 @@ public class DashboardController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> AprovarCadastro(string id, Guid setorId)
+    public async Task<IActionResult> CriarUsuario(string nomeCompleto, string email, string password, string perfil, Guid? setorId)
+    {
+        if (!CanManageUsers()) return RedirectToAction("Login", "Account");
+
+        var client = _httpClientFactory.CreateClient("ApiClient");
+        AddAuthorization(client);
+        var response = await client.PostAsJsonAsync("api/usuarios", new
+        {
+            nomeCompleto,
+            email,
+            password,
+            perfil,
+            setorId
+        });
+
+        if (response.IsSuccessStatusCode)
+        {
+            TempData["StatusMessage"] = "Usuário cadastrado com sucesso.";
+        }
+        else
+        {
+            var error = await response.Content.ReadFromJsonAsync<ApiError>();
+            TempData["StatusError"] = error?.Message ?? "Não foi possível cadastrar o usuário.";
+        }
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AprovarCadastro(string id, Guid? setorId)
     {
         if (!CanManageUsers()) return RedirectToAction("Login", "Account");
 
@@ -129,7 +175,12 @@ public class DashboardController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> CriarSetor(string nome, string? responsavel)
     {
-        if (!CanManageUsers()) return RedirectToAction("Login", "Account");
+        if (HttpContext.Session.GetString("perfil") != "ADMIN" ||
+            string.IsNullOrWhiteSpace(HttpContext.Session.GetString("jwt")))
+        {
+            return RedirectToAction("Login", "Account");
+        }
+
         if (string.IsNullOrWhiteSpace(nome))
         {
             TempData["StatusError"] = "Informe o nome do setor.";
@@ -203,4 +254,7 @@ public class DashboardController : Controller
 
     public sealed record PendingUserApiItem(string Id, string NomeCompleto, string Email, Guid? SetorSolicitadoId);
     public sealed record SectorApiItem(Guid Id, string Nome);
+    public sealed record UserApiItem(string Id, string NomeCompleto, string Email, string Perfil, bool Ativo, string StatusCadastro, Guid? SetorId, Guid? SetorSolicitadoId);
+    public sealed record ProblemSummary(string Title, int Count);
+    private sealed record ApiError(string Message);
 }

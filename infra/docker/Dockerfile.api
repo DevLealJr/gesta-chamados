@@ -10,4 +10,5 @@ RUN dotnet publish ./src/AlunosTech.Api/AlunosTech.Api.csproj -c Release -o /app
 FROM base AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+ENV Kestrel__Endpoints__Http__Url=http://+:8080
 ENTRYPOINT ["dotnet", "AlunosTech.Api.dll"]

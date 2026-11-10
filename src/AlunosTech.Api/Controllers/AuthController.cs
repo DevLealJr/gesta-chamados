@@ -71,7 +71,7 @@ public class AuthController : ControllerBase
     [HttpGet("me")]
     public async Task<IActionResult> Me()
     {
-        var email = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "usuario@alunostech.local";
+        var email = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "usuario@chamados.com";
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
         var user = id is null ? null : await _userManager.FindByIdAsync(id);
         return user is null

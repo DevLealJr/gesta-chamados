@@ -6,6 +6,9 @@
     var tickets = ViewBag.Tickets as IEnumerable<DashboardController.ChamadoApiItem> ?? Enumerable.Empty<DashboardController.ChamadoApiItem>();
     var pendingUsers = ViewBag.PendingUsers as IEnumerable<DashboardController.PendingUserApiItem> ?? Enumerable.Empty<DashboardController.PendingUserApiItem>();
     var sectors = ViewBag.Sectors as IEnumerable<DashboardController.SectorApiItem> ?? Enumerable.Empty<DashboardController.SectorApiItem>();
+    var users = ViewBag.Users as IEnumerable<DashboardController.UserApiItem> ?? Enumerable.Empty<DashboardController.UserApiItem>();
+    var topProblems = ViewBag.TopProblems as IEnumerable<DashboardController.ProblemSummary> ?? Enumerable.Empty<DashboardController.ProblemSummary>();
+    var isAdmin = ViewBag.IsAdmin == true;
 }
 
 <div class="container py-5">
@@ -14,7 +17,7 @@
             <p class="text-primary fw-semibold mb-1">CENTRAL DE ATENDIMENTO</p>
             <h2 class="mb-0">Olá, @ViewBag.UserName</h2>
         </div>
-        <span class="text-muted">Chamados por setor</span>
+        <span class="text-muted">Gestão e atendimento de chamados</span>
     </div>
 
     @if (TempData["StatusMessage"] is not null)
@@ -32,6 +35,26 @@
         <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Em atendimento</small><h3 class="mt-2 mb-0 text-primary">@Model.EmAtendimento</h3></div></div></div>
         <div class="col-6 col-lg-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><small class="text-muted">Resolvidos</small><h3 class="mt-2 mb-0 text-success">@Model.Resolvidos</h3></div></div></div>
     </div>
+
+    <section class="card mt-4 border-0 shadow-sm">
+        <div class="card-body">
+            <h5 class="mb-1">Problemas mais recorrentes em chamados ativos</h5>
+            <p class="text-muted">Agrupados pelo assunto informado nos chamados ainda não finalizados.</p>
+            @if (topProblems.Any())
+            {
+                <ol class="mb-0">
+                    @foreach (var problem in topProblems)
+                    {
+                        <li>@problem.Title <span class="badge text-bg-light">@problem.Count chamado(s)</span></li>
+                    }
+                </ol>
+            }
+            else
+            {
+                <p class="text-muted mb-0">Não há chamados ativos para analisar.</p>
+            }
+        </div>
+    </section>
 
     @if (ViewBag.CanManageUsers == true)
     {
@@ -61,8 +84,8 @@
                                             <form asp-action="AprovarCadastro" method="post" class="d-flex gap-2">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="id" value="@user.Id" />
-                                                <select class="form-select form-select-sm" name="setorId" required aria-label="Setor do colaborador">
-                                                    <option value="">Vincular setor</option>
+                                                <select class="form-select form-select-sm" name="setorId" aria-label="Setor do colaborador">
+                                                    <option value="">Sem setor específico</option>
                                                     @foreach (var sector in sectors)
                                                     {
                                                         <option value="@sector.Id" selected="@(user.SetorSolicitadoId == sector.Id)">@sector.Nome</option>
@@ -91,31 +114,84 @@
         <div class="col-lg-5">
             <section class="card h-100 border-0 shadow-sm">
                 <div class="card-body">
-                    <h5 class="mb-1">Setores</h5>
-                    <p class="text-muted">Setores disponíveis para vincular aos colaboradores.</p>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        @foreach (var sector in sectors)
-                        {
-                            <span class="badge rounded-pill text-bg-light border">@sector.Nome</span>
-                        }
-                    </div>
-                    <form asp-action="CriarSetor" method="post" class="row g-2">
+                    <h5 class="mb-1">Cadastrar equipe</h5>
+                    <p class="text-muted">Gestão cadastra técnicos. Administradores também podem cadastrar gestores.</p>
+                    <form asp-action="CriarUsuario" method="post" class="row g-2">
                         @Html.AntiForgeryToken()
                         <div class="col-12">
-                            <label class="form-label" for="nome-setor">Novo setor</label>
-                            <input id="nome-setor" name="nome" class="form-control" maxlength="100" required placeholder="Ex.: Logística" />
+                            <label class="form-label" for="nome-usuario">Nome completo</label>
+                            <input id="nome-usuario" name="nomeCompleto" class="form-control" maxlength="200" required />
                         </div>
-                        <div class="col-8">
-                            <label class="form-label" for="responsavel-setor">Responsável (opcional)</label>
-                            <input id="responsavel-setor" name="responsavel" class="form-control" maxlength="200" />
+                        <div class="col-12">
+                            <label class="form-label" for="email-usuario">E-mail</label>
+                            <input id="email-usuario" name="email" type="email" class="form-control" maxlength="256" required />
                         </div>
-                        <div class="col-4 d-flex align-items-end">
-                            <button type="submit" class="btn btn-outline-primary w-100">Adicionar</button>
+                        <div class="col-12">
+                            <label class="form-label" for="senha-usuario">Senha temporária</label>
+                            <input id="senha-usuario" name="password" type="password" class="form-control" minlength="8" required />
                         </div>
+                        <div class="col-12">
+                            <label class="form-label" for="perfil-usuario">Perfil</label>
+                            <select id="perfil-usuario" name="perfil" class="form-select" required>
+                                @if (isAdmin)
+                                {
+                                    <option value="GESTOR">Gestão</option>
+                                }
+                                <option value="TECNICO">Técnico</option>
+                            </select>
+                        </div>
+                        @if (isAdmin)
+                        {
+                            <div class="col-12">
+                                <label class="form-label" for="setor-usuario">Setor (opcional)</label>
+                                <select id="setor-usuario" name="setorId" class="form-select">
+                                    <option value="">Sem setor vinculado</option>
+                                    @foreach (var sector in sectors)
+                                    {
+                                        <option value="@sector.Id">@sector.Nome</option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                        <div class="col-12"><button type="submit" class="btn btn-primary w-100">Cadastrar usuário</button></div>
                     </form>
-                    <ul class="list-group list-group-flush mt-3">
-                        <li class="list-group-item px-0">Chamados atrasados: <strong>@Model.Atrasados</strong></li>
+                    <hr />
+                    <h6>Usuários cadastrados</h6>
+                    <ul class="list-group list-group-flush">
+                        @foreach (var user in users)
+                        {
+                            <li class="list-group-item px-0 d-flex justify-content-between gap-2">
+                                <span>@user.NomeCompleto <small class="text-muted">(@user.Perfil)</small><br /><small class="text-muted">@user.Email</small></span>
+                                <span class="badge text-bg-light align-self-center">@user.StatusCadastro</span>
+                            </li>
+                        }
                     </ul>
+                    @if (isAdmin)
+                    {
+                        <hr />
+                        <h6>Setores</h6>
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            @foreach (var sector in sectors)
+                            {
+                                <span class="badge rounded-pill text-bg-light border">@sector.Nome</span>
+                            }
+                        </div>
+                        <form asp-action="CriarSetor" method="post" class="row g-2">
+                            @Html.AntiForgeryToken()
+                            <div class="col-12">
+                                <label class="form-label" for="nome-setor">Novo setor</label>
+                                <input id="nome-setor" name="nome" class="form-control" maxlength="100" required />
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label" for="responsavel-setor">Responsável (opcional)</label>
+                                <input id="responsavel-setor" name="responsavel" class="form-control" maxlength="200" />
+                            </div>
+                            <div class="col-4 d-flex align-items-end">
+                                <button type="submit" class="btn btn-outline-primary w-100">Adicionar</button>
+                            </div>
+                        </form>
+                    }
+                    <p class="mt-3 mb-0">Chamados atrasados: <strong>@Model.Atrasados</strong></p>
                 </div>
             </section>
         </div>
@@ -156,13 +232,22 @@
                                             @Html.AntiForgeryToken()
                                             <input type="hidden" name="id" value="@ticket.Id" />
                                             <textarea name="observacao" class="form-control form-control-sm" rows="2" placeholder="Resposta ou informação solicitada"></textarea>
+                                            @if (Context.Session.GetString("perfil") is "ADMIN" or "GESTOR")
+                                            {
+                                                <select class="form-select form-select-sm" name="tecnicoId" aria-label="Técnico responsável">
+                                                    <option value="">Sem alteração de responsável</option>
+                                                    @foreach (var technician in users.Where(user => user.Perfil == "TECNICO" && user.Ativo))
+                                                    {
+                                                        <option value="@technician.Id" selected="@(ticket.TecnicoId?.ToString() == technician.Id)">@technician.NomeCompleto</option>
+                                                    }
+                                                </select>
+                                            }
                                             <div class="d-flex gap-2">
                                                 <select class="form-select form-select-sm" name="status">
-                                                    <option value="EmAtendimento">Em atendimento</option>
-                                                    <option value="EmAnalise">Em análise</option>
-                                                    <option value="AguardandoSolicitante">Aguardar solicitante</option>
-                                                    <option value="Resolvido">Resolvido</option>
-                                                    <option value="Fechado">Fechado</option>
+                                                    @foreach (var status in new[] { "Aberto", "EmAnalise", "EmAtendimento", "AguardandoSolicitante", "Resolvido" })
+                                                    {
+                                                        <option value="@status" selected="@(ticket.Status == status)">@status</option>
+                                                    }
                                                 </select>
                                                 <button type="submit" class="btn btn-sm btn-primary">Responder</button>
                                             </div>

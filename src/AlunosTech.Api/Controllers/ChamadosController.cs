@@ -83,7 +83,7 @@ public class ChamadosController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = "ADMIN,GESTOR,TECNICO,COLABORADOR")]
+    [Authorize(Roles = "COLABORADOR")]
     public async Task<IActionResult> Create([FromBody] CreateChamadoRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Titulo) || string.IsNullOrWhiteSpace(request.Descricao))
@@ -164,12 +164,22 @@ public class ChamadosController : ControllerBase
             return NotFound();
         }
 
+        if (ticket.Status is StatusChamado.Fechado or StatusChamado.Cancelado)
+        {
+            return Conflict(new { message = "Chamados finalizados não podem ser alterados." });
+        }
+
         var previousStatus = ticket.Status;
         if (!string.IsNullOrWhiteSpace(request.Status))
         {
             if (!Enum.TryParse<StatusChamado>(request.Status, true, out var status))
             {
                 return BadRequest(new { message = "Status inválido." });
+            }
+
+            if (status is StatusChamado.Fechado or StatusChamado.Cancelado)
+            {
+                return BadRequest(new { message = "Somente o solicitante pode confirmar a conclusão do chamado." });
             }
 
             ticket.Status = status;
@@ -187,7 +197,27 @@ public class ChamadosController : ControllerBase
             ticket.Prioridade = priority;
         }
 
-        ticket.TecnicoId = request.TecnicoId ?? ticket.TecnicoId;
+        var role = User.FindFirstValue(ClaimTypes.Role);
+        if (request.TecnicoId.HasValue)
+        {
+            if (role == "TECNICO")
+            {
+                return Forbid();
+            }
+
+            var technician = await _db.Users.FirstOrDefaultAsync(user =>
+                user.Id == request.TecnicoId.Value.ToString() &&
+                user.Perfil == PerfilUsuario.TECNICO &&
+                user.Ativo &&
+                user.StatusCadastro == "Aprovado");
+            if (technician is null)
+            {
+                return BadRequest(new { message = "Selecione um técnico ativo." });
+            }
+
+            ticket.TecnicoId = request.TecnicoId;
+        }
+
         ticket.DataUltimaAtualizacao = DateTime.UtcNow;
         var actorId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         Guid? actorGuid = Guid.TryParse(actorId, out var parsedActorId) ? parsedActorId : null;
@@ -214,6 +244,93 @@ public class ChamadosController : ControllerBase
         return Ok(Map(ticket));
     }
 
+    [HttpPost("{id:guid}/comentarios")]
+    [Authorize(Roles = "COLABORADOR")]
+    public async Task<IActionResult> Reply(Guid id, [FromBody] CreateCommentRequest request)
+    {
+        var ticket = await VisibleTickets(tracking: true).FirstOrDefaultAsync(item => item.Id == id);
+        if (ticket is null)
+        {
+            return NotFound();
+        }
+
+        if (ticket.Status != StatusChamado.AguardandoSolicitante)
+        {
+            return Conflict(new { message = "Este chamado não está aguardando uma resposta sua." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Texto))
+        {
+            return BadRequest(new { message = "Escreva uma resposta antes de enviar." });
+        }
+
+        var actorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var previousStatus = ticket.Status;
+        ticket.Status = StatusChamado.EmAtendimento;
+        ticket.DataUltimaAtualizacao = DateTime.UtcNow;
+        _db.ComentariosChamado.Add(new ComentarioChamado
+        {
+            ChamadoId = ticket.Id,
+            AutorId = actorId,
+            Texto = request.Texto.Trim()
+        });
+        _db.HistoricosChamado.Add(new HistoricoChamado
+        {
+            ChamadoId = ticket.Id,
+            StatusAnterior = previousStatus,
+            StatusAtual = ticket.Status,
+            UsuarioResponsavelId = actorId,
+            Observacao = "O solicitante respondeu ao chamado."
+        });
+
+        await _db.SaveChangesAsync();
+        return Ok(Map(ticket));
+    }
+
+    [HttpPost("{id:guid}/confirmacao")]
+    [Authorize(Roles = "COLABORADOR")]
+    public async Task<IActionResult> ConfirmResolution(Guid id, [FromBody] ConfirmResolutionRequest request)
+    {
+        var ticket = await VisibleTickets(tracking: true).FirstOrDefaultAsync(item => item.Id == id);
+        if (ticket is null)
+        {
+            return NotFound();
+        }
+
+        if (ticket.Status != StatusChamado.Resolvido)
+        {
+            return Conflict(new { message = "Este chamado não está aguardando a confirmação da solução." });
+        }
+
+        var previousStatus = ticket.Status;
+        ticket.Status = request.Resolvido ? StatusChamado.Fechado : StatusChamado.EmAtendimento;
+        ticket.DataUltimaAtualizacao = DateTime.UtcNow;
+        var actorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var observation = request.Resolvido
+            ? "Solicitante confirmou que o problema foi resolvido."
+            : "Solicitante informou que o problema não foi resolvido.";
+        if (!string.IsNullOrWhiteSpace(request.Comentario))
+        {
+            _db.ComentariosChamado.Add(new ComentarioChamado
+            {
+                ChamadoId = ticket.Id,
+                AutorId = actorId,
+                Texto = request.Comentario.Trim()
+            });
+        }
+        _db.HistoricosChamado.Add(new HistoricoChamado
+        {
+            ChamadoId = ticket.Id,
+            StatusAnterior = previousStatus,
+            StatusAtual = ticket.Status,
+            UsuarioResponsavelId = actorId,
+            Observacao = observation
+        });
+
+        await _db.SaveChangesAsync();
+        return Ok(Map(ticket));
+    }
+
     private IQueryable<Chamado> VisibleTickets(bool tracking = false)
     {
         var tickets = tracking ? _db.Chamados.AsQueryable() : _db.Chamados.AsNoTracking();
@@ -223,12 +340,14 @@ public class ChamadosController : ControllerBase
             return tickets;
         }
 
-        if (role == "GESTOR" || role == "TECNICO")
+        if (role == "GESTOR")
         {
-            var sectorClaim = User.FindFirstValue("setorId");
-            return Guid.TryParse(sectorClaim, out var sectorId)
-                ? tickets.Where(ticket => ticket.SetorId == sectorId)
-                : tickets.Where(_ => false);
+            return tickets;
+        }
+
+        if (role == "TECNICO" && Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var technicianId))
+        {
+            return tickets.Where(ticket => ticket.TecnicoId == technicianId);
         }
 
         if (Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
@@ -257,3 +376,5 @@ public class ChamadosController : ControllerBase
 }
 
 public sealed record CommentResponse(Guid Id, Guid AutorId, string Texto, DateTime DataHora);
+public sealed record CreateCommentRequest(string Texto);
+public sealed record ConfirmResolutionRequest(bool Resolvido, string? Comentario = null);

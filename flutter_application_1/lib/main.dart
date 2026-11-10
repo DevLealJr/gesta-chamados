@@ -2,15 +2,21 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:uuid/uuid.dart';
 
 import 'local_store.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    databaseFactory = databaseFactoryFfiWeb;
+  }
   runApp(const AlunosTechApp());
 }
 
@@ -809,7 +815,7 @@ class _TicketsScreenState extends State<TicketsScreen> {
                             title: Text(ticket.title, style: const TextStyle(fontWeight: FontWeight.w600)),
                             subtitle: Padding(
                               padding: const EdgeInsets.only(top: 8),
-                              child: Text('${ticket.number} · ${_formatDate(ticket.createdAt)}\n${ticket.description}', maxLines: 3, overflow: TextOverflow.ellipsis),
+                              child: Text(_ticketSummary(ticket), maxLines: 4, overflow: TextOverflow.ellipsis),
                             ),
                             isThreeLine: true,
                             trailing: Column(
@@ -822,7 +828,11 @@ class _TicketsScreenState extends State<TicketsScreen> {
                             ),
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute<void>(
-                                builder: (_) => TicketDetailsScreen(ticket: ticket, token: widget.token),
+                                builder: (_) => TicketDetailsScreen(
+                                  ticket: ticket,
+                                  token: widget.token,
+                                  onUpdated: _refresh,
+                                ),
                               ),
                             ),
                           ),
@@ -837,13 +847,29 @@ class _TicketsScreenState extends State<TicketsScreen> {
 
   String _formatDate(DateTime date) =>
       '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+
+  String _ticketSummary(LocalTicket ticket) {
+    final nextAction = switch (ticket.status) {
+      'Resolvido' => 'Seu problema foi resolvido? Toque para responder.',
+      'AguardandoSolicitante' => 'A equipe aguarda sua resposta. Toque para responder.',
+      _ => '',
+    };
+    return '${ticket.number} · ${_formatDate(ticket.createdAt)}\n${ticket.description}'
+        '${nextAction.isEmpty ? '' : '\n$nextAction'}';
+  }
 }
 
 class TicketDetailsScreen extends StatefulWidget {
-  const TicketDetailsScreen({required this.ticket, required this.token, super.key});
+  const TicketDetailsScreen({
+    required this.ticket,
+    required this.token,
+    required this.onUpdated,
+    super.key,
+  });
 
   final LocalTicket ticket;
   final String token;
+  final Future<void> Function() onUpdated;
 
   @override
   State<TicketDetailsScreen> createState() => _TicketDetailsScreenState();
@@ -851,7 +877,10 @@ class TicketDetailsScreen extends StatefulWidget {
 
 class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
   List<Map<String, dynamic>> _comments = [];
+  final _replyController = TextEditingController();
   bool _loading = true;
+  bool _sending = false;
+  late String _status = widget.ticket.status;
   String? _error;
 
   @override
@@ -890,6 +919,117 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
   }
 
   @override
+  void dispose() {
+    _replyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reply() async {
+    final text = _replyController.text.trim();
+    if (text.isEmpty) {
+      _showMessage('Escreva sua resposta antes de enviar.');
+      return;
+    }
+
+    await _postTicketAction(
+      'comentarios',
+      {'texto': text},
+      successMessage: 'Resposta enviada. A equipe dará continuidade ao chamado.',
+    );
+  }
+
+  Future<void> _confirmResolution(bool resolved) async {
+    String? comment;
+    if (!resolved) {
+      final controller = TextEditingController();
+      comment = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('O problema continua'),
+          content: TextField(
+            controller: controller,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: 'Conte o que ainda precisa ser resolvido (opcional)'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Voltar')),
+            FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Enviar')),
+          ],
+        ),
+      );
+      controller.dispose();
+      if (comment == null) return;
+    }
+
+    await _postTicketAction(
+      'confirmacao',
+      {'resolvido': resolved, if (comment?.isNotEmpty == true) 'comentario': comment},
+      successMessage: resolved ? 'Chamado finalizado. Obrigado pela confirmação.' : 'Chamado reaberto para a equipe.',
+    );
+  }
+
+  Future<void> _postTicketAction(
+    String route,
+    Map<String, dynamic> body, {
+    required String successMessage,
+  }) async {
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/api/chamados/${widget.ticket.id}/$route'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${widget.token}',
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+      final payload = _decodeResponse(response);
+      if (response.statusCode != 200) {
+        _showMessage(payload['message'] as String? ?? 'Não foi possível atualizar o chamado.');
+        return;
+      }
+
+      final updated = LocalTicket(
+        id: widget.ticket.id,
+        ownerId: widget.ticket.ownerId,
+        title: widget.ticket.title,
+        description: widget.ticket.description,
+        priority: widget.ticket.priority,
+        status: payload['status'] as String? ?? _status,
+        createdAt: widget.ticket.createdAt,
+        synced: true,
+        number: widget.ticket.number,
+      );
+      await LocalStore.instance.saveTicket(updated);
+      _replyController.clear();
+      setState(() {
+        _status = updated.status;
+        _error = null;
+      });
+      await _loadComments();
+      await widget.onUpdated();
+      _showMessage(successMessage);
+    } on SocketException {
+      _showMessage('É necessário estar conectado para enviar a resposta.');
+    } on TimeoutException {
+      _showMessage('A API demorou para responder. Tente novamente.');
+    } catch (error) {
+      _showMessage('Não foi possível atualizar o chamado: $error');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ticket = widget.ticket;
     return Scaffold(
@@ -904,7 +1044,7 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
           Wrap(
             spacing: 8,
             children: [
-              Chip(label: Text(ticket.synced ? ticket.status : 'Aguardando envio')),
+              Chip(label: Text(ticket.synced ? _status : 'Aguardando envio')),
               Chip(label: Text('Prioridade ${ticket.priority}')),
             ],
           ),
@@ -929,6 +1069,48 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
                 ),
               ),
             ),
+          if (ticket.synced && _status == 'AguardandoSolicitante') ...[
+            const SizedBox(height: 20),
+            const Text('A equipe precisa de uma informação sua', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _replyController,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(labelText: 'Sua resposta'),
+            ),
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: _sending ? null : _reply,
+              child: _sending ? const CircularProgressIndicator() : const Text('Enviar resposta'),
+            ),
+          ],
+          if (ticket.synced && _status == 'Resolvido') ...[
+            const SizedBox(height: 20),
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Seu problema foi resolvido?'),
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _sending ? null : () => _confirmResolution(false),
+                    child: const Text('Não, ainda preciso de ajuda'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _sending ? null : () => _confirmResolution(true),
+                    child: const Text('Sim, finalizar chamado'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
